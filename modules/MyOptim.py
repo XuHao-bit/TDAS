@@ -6,8 +6,8 @@ import numpy as np
 
 class MyAdam:
     def __init__(self, params, beta1=0.9, beta2=0.999, eps=1e-8, weight_decay=0) -> None:
-        self.v = {}   # 1阶矩
-        self.s = {}    # 2阶矩
+        self.v = {}   # first order of moment
+        self.s = {}    # second order of moment
         self.t = {}
         self.beta1 = beta1
         self.beta2 = beta2

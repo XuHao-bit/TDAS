@@ -46,7 +46,6 @@ def train_test_user_list(dataset='movielens', rand=True, random_state=32, train_
 
 
 def load_dataset(user_set, dataset='movielens', support_size=16, query_size=4):
-    # pickle 中是np array类型
     sup_x1_list, sup_x2_list, sup_y_list, que_x1_list, que_x2_list, que_y_list = [], [], [], [], [], []
     path = 'data_processed/' + dataset + '/raw/'
     
@@ -77,10 +76,12 @@ def load_dataset(user_set, dataset='movielens', support_size=16, query_size=4):
     return dataset_data
 
 def fix_load_dataset(user_set, dataset='movielens', support_size=16, query_size=4):
-    # pickle 中是np array类型
+    """
+    load dataset with different support set length
+    """
     sup_x1_list, sup_x2_list, sup_y_list, que_x1_list, que_x2_list, que_y_list = [], [], [], [], [], []
     path = 'data_processed/' + dataset + '/raw/'
-    fix_sup_size = 15
+    fix_sup_size = 15 # query set start point
     for user_id in user_set:
         u_x1 = pickle.load(open('{}sample_{}_x1.p'.format(path, str(user_id)), 'rb'))
         u_x2 = pickle.load(open('{}sample_{}_x2.p'.format(path, str(user_id)), 'rb'))

@@ -9,7 +9,7 @@ from modules.TaskEncoder import TaskEncoder, TaskMemEncoder, TaskMeanEncoder, Ta
 
 from DataLoading import *
 
-# 模型，参考
+# 
 class TaskDiffModel(nn.Module):
     def __init__(self, dataset, emb_info, dataset_info, config_settings) -> None:
         super().__init__()

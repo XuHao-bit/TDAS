@@ -66,7 +66,7 @@ class TaskAdaptiveHyperParameterOptimizer(nn.Module):
         else:
             step_size = self.n_inner_loop
         
-        # names_weights_dict 将model的所有参数按照原始的key-value存储；key: layer.weight or layer.bias
+        # names_weights_dict re-store the original parameters of base model as the `key-value` format；key: layer.weight or layer.bias
         for key in names_weights_dict.keys():
             # init per-step per-layer meta-learnable learning rate term
             self.names_alpha_dict[key.replace('.','-')] = nn.Parameter(
@@ -95,35 +95,9 @@ class TaskAdaptiveHyperParameterOptimizer(nn.Module):
         # print(gen_alpha.shape)
         return gen_alpha, gen_beta
 
-    # def update_params2(self, names_weights_dict, names_grads_dict, gen_alpha_dict, gen_beta_dict, num_step):
-    #     """
-    #     update the names_weights_dict and return a new dict
-    #     """
-    #     # gen_alpha and beta are per-layer params
-    #     updated_names_weight_dict = dict()
-    #     for key in names_grads_dict.keys():
-    #         adaptive_wd_bias = gen_beta_dict[key] * self.names_beta_dict[key.replace('.','-')][num_step]
-    #         adaptive_lr = gen_alpha_dict[key] * self.names_alpha_dict[key.replace('.','-')][num_step]
-    #         updated_names_weight_dict[key] = (1 - adaptive_wd_bias) * names_weights_dict[key] - adaptive_lr * names_grads_dict[key]
-    #     return updated_names_weight_dict
-    
-    # def update_params(self, model, names_grads_dict, gen_alpha_dict, gen_beta_dict, num_step):
-    #     """
-    #     update the names_weights_dict and return a new dict
-    #     """
-    #     # gen_alpha and beta are per-layer params
-    #     # updated_names_weight_dict = dict()
-    #     for param, key in zip(model.parameters(), names_grads_dict.keys()):
-    #         # beta = 
-    #         adaptive_wd_bias = gen_beta_dict[key] * self.names_beta_dict[key.replace('.','-')][num_step]
-    #         adaptive_lr = gen_alpha_dict[key] * self.names_alpha_dict[key.replace('.','-')][num_step]
-    #         param.data = (1 - adaptive_wd_bias) * param.data - adaptive_lr * names_grads_dict[key]
-
-        # return updated_names_weight_dict
-
     def update_params3(self, model, names_grads_dict, gen_alpha_dict, gen_beta_dict, num_step, writer_info=None):
         """
-        只使用model来更新
+        `model` <-- `model` (the param `model` of this function is passed in as param `self.local_model` in the function Modeling.tdmeta_local_update())
         """
         # gen_alpha and beta are per-layer params
         for name, module in model.named_modules():
@@ -159,9 +133,11 @@ class TaskAdaptiveHyperParameterOptimizer(nn.Module):
 
     def update_params4(self, model, local_model, names_grads_dict, gen_alpha_dict, gen_beta_dict, num_step, writer_info=None):
         """
-        update the names_weights_dict and return a new dict
-        用model的参数计算得到更新后的参数new_param
-        删除local_module的weight和bias, 并替换成new_param, 此时local_model变为non-leaf node, 但是model仍然为leaf
+        `local_model` <-- `model`
+        update the paramters in `local_model` by using `model`
+        first, get updated parameters `new_param` by calculating the paramters in `model`
+        second, deleting the `.weight` and `.bias` term in `local_model`, and replace them as `new_param`, which makes the `local_model` as non-leaf node and keeps the `model` as leaf node.
+        (this function is used at the first step in task-adaptive local updating)
         """
         # gen_alpha and beta are per-layer params
         for (name, module), l_module in zip(model.named_modules(), local_model.modules()):

@@ -122,8 +122,6 @@ class DB_Item_emb(torch.nn.Module):
 
 
 
-# decoder 和 model modulater 可以分开写！
-# 在forward的时候，就self.decoder.layer1()->alpha,bias->self.decoder.layer2就行
 class Decoder(nn.Module):
     def __init__(self, x_dim, y_dim):
         super(Decoder, self).__init__()

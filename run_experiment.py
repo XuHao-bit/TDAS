@@ -8,20 +8,22 @@ from DataLoading import *
 from utils import config, dataset_info, config_settings, seed_all
 
 parser = argparse.ArgumentParser()
+# comparison experiment
 parser.add_argument('--dataset', type=str, default='bookcrossing')
 parser.add_argument('--seed', type=int, default=2020)
-parser.add_argument('--mode', type=str, default='Deep')
+parser.add_argument('--mode', type=str, default='Deep') # different training mode. `Deep` for Deep Learning; `melu` for MAML; `tdmeta` for our paper;
 parser.add_argument('--save', type=str, default='False')
-# parser.add_argument('--use_writer', type=str, default='False')
 parser.add_argument('--save_name', type=str, default=f'model_{datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")}')
 parser.add_argument('--epoch', type=int, default=35)
 parser.add_argument('--cuda', type=int, default=0)
-parser.add_argument('--use_gen_hypr', type=str, default='True')
-parser.add_argument('--use_lea_hypr', type=str, default='True')
-parser.add_argument('--use_ginfo_only', type=str, default='False')   # 代表generating adaptive hyper-parameters的时候，仅使用avg grad 以及avg weight信息；
-parser.add_argument('--use_tinfo_only', type=str, default='False')   # 代表generating adaptive hyper-parameters的时候，仅使用task emb信息；
+
+# ablation experiment
+parser.add_argument('--use_gen_hypr', type=str, default='True')     # use personalized hyperparameter coefficients; noted as `$\alpha'_{i,j}$` in our paper; 
+parser.add_argument('--use_lea_hypr', type=str, default='True')     # use Meta General Hyperparameters; noted as `$\phi_{\alpha_j}`$ in our paper;
+parser.add_argument('--use_ginfo_only', type=str, default='False')   # use task training difficulty information only for generating adaptive hyperparameters;
+parser.add_argument('--use_tinfo_only', type=str, default='False')   # use task composition difficulty information only ...;
 parser.add_argument('--nshot', type=int, default=15)
-parser.add_argument('--use_tmem', type=str, default='False')
+parser.add_argument('--use_tmem', type=str, default='False')        # use task relevance difficulty information;
 
 # === prepare log ===
 today_time = datetime.datetime.now().strftime("%Y-%m-%d")
@@ -32,9 +34,6 @@ os.makedirs(log_dir, exist_ok=True)
 args = vars(parser.parse_args())
 seed_all(args['seed'])
 print(args)
-# if args['use_writer'] != 'False':
-#     config_settings['use_writer'] = True
-#     config_settings['writer_log'] = f"{log_dir}/{args['use_writer']}"
 if args['epoch'] > 0 and args['epoch']<200:
     config_settings['n_epoch'] = args['epoch']
 if torch.cuda.is_available():
@@ -61,30 +60,31 @@ test_dataset = fix_load_dataset(test_user,args['dataset'],args['nshot'],25)
 # === prepare hyper-param ===
 meta_lrs = [0.001] # global update rate, global < local
 local_lrs = [0.1] # local update rate
-tdmeta_lrs = [0.001]
+# tdmeta_lrs = [0.001] # not use
 
 param_settings = []
 for meta_lr in meta_lrs:
     for local_lr in local_lrs:
-        for tdmeta_lr in tdmeta_lrs:
-            param_settings.append([3, meta_lr, local_lr, tdmeta_lr])
+        # for tdmeta_lr in tdmeta_lrs:
+        param_settings.append([3, meta_lr, local_lr])
 
 for param in param_settings:
     inner_loop, meta_lr, local_lr, tdmeta_lr = param
     config_settings['inner_loop_steps'] = inner_loop
     config_settings['meta_lr'] = meta_lr
     config_settings['local_lr'] = local_lr
-    config_settings['init_lr'] = local_lr # tdmeta 的local lr 参数需要修改init lr
-    config_settings['tdmeta_lr'] = tdmeta_lr
+    config_settings['init_lr'] = local_lr 
+    # config_settings['tdmeta_lr'] = tdmeta_lr
     config_settings['min_lr'] = meta_lr
     # log
     config_settings['model_name'] = f'tdmeta+adam_i{inner_loop}_gl{meta_lr}_ll{local_lr}'
     config_settings['train_log'] = f'{log_dir}/{config_settings["model_name"]}' # train and val loss log
 
-    if os.path.exists(config_settings['train_log']):    # 同一个模型，训练的第几次；
+    if os.path.exists(config_settings['train_log']):
         config_settings['n_train_log'] = f"no_{len(os.listdir(config_settings['train_log']))}"
 
     print(config_settings)
+    # different training mode use different model
     model = {
         'deep': DeepModel,
         'melu': DeepModel,
@@ -93,6 +93,7 @@ for param in param_settings:
 
     # train and val
     modeling = Modeling(model, config_settings=config_settings, mode=args['mode'])
+    # different training mode use different training method
     train_dict = {
         'deep': modeling.deep_learning_train,
         'melu': modeling.melu_train,

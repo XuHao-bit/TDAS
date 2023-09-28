@@ -14,7 +14,7 @@ from DataLoading import *
 
 
 
-# 优化器，参考few_shot_learning_system.py的一部分（原来的代码不太好懂, 以及TaNP的Trainer
+# Trainer, model optimization
 class Modeling:
     def __init__(self, model, config_settings, mode='Meta') -> None:
         self.device = config_settings['device']
@@ -22,10 +22,8 @@ class Modeling:
         self.n_epoch = config_settings['n_epoch']
         self.meta_lr = config_settings['meta_lr'] # global lr
         self.local_lr = config_settings['local_lr'] # local lr for melu
-        # self.tdmeta_lr = config_settings['tdmeta_lr']
         self.min_lr = config_settings['min_lr']
         self.meta_wd = config_settings['meta_wd'] # global wd
-        # self.writer = SummaryWriter(config_settings['writer_log'])
         self.train_writer = SummaryWriter(config_settings['train_log'])
         self.use_writer = config_settings['use_writer']
         self.use_gen_hypr = config_settings['use_gen_hypr']
@@ -34,7 +32,7 @@ class Modeling:
         self.player_only = config_settings['player_only']
         self.clip_norm = config_settings['clip_norm']
         self.model = model.to(self.device)
-        self.local_model = deepcopy(self.model.base_model)
+        self.local_model = deepcopy(self.model.base_model) # after the task adaptive local update, the base model become this model.
         self.model_name = config_settings['model_name']
         self.early_stop = EarlyStopping(5, path=f'./saved_models/{self.model_name}_cp.pth')
         
@@ -47,15 +45,16 @@ class Modeling:
         # task adaptive optimizer init
         if mode == 'tdmeta':
             phi_copy = self.model.base_model.state_dict()
-            self.model.task_adaptive_optimizer_init(phi_copy)
+            self.model.task_adaptive_optimizer_init(phi_copy)   # initialize the task adaptive optimizer, \
+                                                                # parts of the initialization of the opimizer need to know the parameter size of the base model.
 
-            self.optimizer = torch.optim.Adam([
+            self.optimizer = torch.optim.Adam([ # update the parameters of meta learner (task encoder and adaptive hyperparameter generator)
                 {'params': self.model.task_encoder.parameters()},
                 {'params': self.model.task_adaptive_optimizer.parameters()},
             ], lr=self.meta_lr, amsgrad=False, weight_decay=self.meta_wd)
 
             # global phi optimizer
-            self.global_optimizer = MyAdam(phi_copy, weight_decay=self.meta_wd)
+            self.global_optimizer = MyAdam(phi_copy, weight_decay=self.meta_wd) # update the global parameter of base model
 
         elif mode == 'melu':
             # local update optimizer should be sgd
@@ -70,12 +69,9 @@ class Modeling:
 
         # update rules
         self.loss_fn = nn.MSELoss()
-        
-        # self.local_optim = torch.optim.Adam([
-        #     {'params': self.model.parameters()},
-        # ], lr=self.meta_lr, amsgrad=False)
 
-    # [local update] ===================================
+    # ==== [local update methods] ====================== 
+    # standard local update for simple meta learning
     def local_update(self, sup_x1, sup_x2, sup_y, optimizer, theta=None):
         # load theta for meta learning local update
         if theta:
@@ -90,11 +86,15 @@ class Modeling:
             sup_loss.backward()
             optimizer.step()
 
+    # task adaptive local update for ours
     def tdmeta_local_update(self, sup_x1, sup_x2, sup_y, que_x1, que_x2, que_y, task_emb, writer_info=None):
         # with torch.autograd.set_detect_anomaly(True):
         model_keys = self.model.base_model.state_dict().keys()
         task_losses = []
         for i_loop in range(self.n_inner_loop):
+            # `this_model` here is the `base model` used in the paper
+            # at the first loop, base model is not updated, so base model should be `self.model`
+            # at other loops, base model is updated by task-adaptive optimizer, so base model should be `self.local_model`
             if i_loop == 0:
                 this_model = self.model.base_model
             else:
@@ -158,8 +158,17 @@ class Modeling:
                     gen_beta_dict[key] = 1
 
             if i_loop == 0:
-                # 第1轮, local_model经过model计算得来, local_model变为non-leaf
-                self.model.task_adaptive_optimizer.update_params4(model=self.model.base_model, # self.model.base_model.state_dict().values()
+                # at the first loop, the base model is updated to `self.local_model` by using `self.model.base_model`
+
+                # NOTED: both of the two variables `self.local_model` and `self.model.base_model` are mean the same thing -- the base model in our paper, \
+                # the reason we dont use the same variable, is that we want to keep the variable `self.model.base_model` to be a leaf-node in the calculation graph, \
+                # so that we can use the auto gradient mechanism in PyTorch. \
+                # and the calculation graph looks like this: `self.local_model` <-- `self.model.base_model`
+                # If we only use one variable (e.g., `self.model.base_model`) to represent the base model, \
+                # `self.model.base_model` will become a non-leaf node in the calculation graph after local update step, \
+                # so the torch.autograd.grad() function will be failed.
+                # (you can use .is_leaf function to see whether a variable is a leaf node)
+                self.model.task_adaptive_optimizer.update_params4(model=self.model.base_model,
                                                             local_model=self.local_model,
                                                             names_grads_dict=sup_grad_dict,
                                                             gen_alpha_dict=gen_alpha_dict,
@@ -178,7 +187,8 @@ class Modeling:
                     this_step = 0
                 else:
                     this_step = i_loop
-                # 经过update_param之后，is_leaf为false
+                # at other loop steps, we update `self.local_model`
+                # and the calculation graph looks like this: `self.local_model` <-- `self.local_model` <-- (many steps) <-- `self.local_model` <-- `self.model.base_model`
                 self.model.task_adaptive_optimizer.update_params3(model=self.local_model,
                                                                 names_grads_dict=sup_grad_dict,
                                                                 gen_alpha_dict=gen_alpha_dict,
@@ -197,52 +207,10 @@ class Modeling:
             #     print(n, g)
             
         return task_losses
-                
-    # [model test] =====================================
-    def model_test(self, data, optimizer):
-        # 用optimizer来控制local update更新的内容
-        all_loss = 0
-        rmse = []
-        mae = []
-        ndcg1, ndcg3, ndcg5, ndcg7, ndcg10 = [], [], [], [], []
-        recall1, recall3, recall5, recall7, recall10 = [], [], [], [], []
-        phi = deepcopy(self.model.state_dict())
-
-        for i in tqdm(range(len(data))):
-            # print('before theta:{}'.format(theta['hidden_layer_1.weight']))
-            sup_x1, sup_x2, sup_y, que_x1, que_x2, que_y = data[i]
-            sup_x1, sup_x2, sup_y, que_x1, que_x2 = sup_x1.to(self.device), sup_x2.to(self.device),\
-                                                                sup_y.to(self.device), que_x1.to(self.device),\
-                                                                que_x2.to(self.device)
-
-            # local update
-            self.model.load_state_dict(phi)
-            self.local_update(sup_x1=sup_x1, sup_x2=sup_x2, sup_y=sup_y, optimizer=optimizer)
-            
-            # que loss
-            with torch.no_grad():
-                que_y_hat = self.model(que_x1, que_x2).cpu()
-                local_que_loss = self.loss_fn(que_y_hat, que_y.view(-1, 1))
-                all_loss += local_que_loss
-
-            # print(que_y_hat)
-            # que_y_pred = torch.argmax(que_y_hat, dim=1) # range: 0-4
-            mae.append(MAE(que_y_hat.view(-1), que_y.cpu()))
-            rmse.append(RMSE(que_y_hat.view(-1), que_y.cpu()))
-            ndcg3.append(NDCG(que_y_hat.view(-1), que_y.cpu(), 3))
-            ndcg5.append(NDCG(que_y_hat.view(-1), que_y.cpu(), 5))
-
-        mmae = sum(mae) / len(mae)
-        mrmse = sum(rmse) / len(rmse)
-        mndcg3 = sum(ndcg3) / len(ndcg3)
-        mndcg5 = sum(ndcg5) / len(ndcg5)
-        mloss = all_loss / len(data) 
-        
-        # print(mae, rmse)
-        print(f'mae:{mmae.item()}, rmse:{mrmse.item()}, ndcg3:{mndcg3}, ndcg5:{mndcg5}')
-        return mmae, rmse
-    
-    # [deep learning train] ===================================
+               
+   
+    # [model training method] ===================================
+    # deep learning
     def deep_learning_train(self, data, test_data):
         best_model, best_mae = None, None
         for epoch in range(self.n_epoch):
@@ -269,7 +237,7 @@ class Modeling:
                 best_mae = mmae
         return best_model
     
-    # [melu train] ============================================
+    # maml (melu)
     def melu_train(self, data, test_data):
         # phi is the whole model param
         phi = deepcopy(self.model.base_model.state_dict())
@@ -310,7 +278,7 @@ class Modeling:
 
         return best_model
 
-    # [meta learning train & test] ===================================
+    # ours (task-difficulty-aware meta learning with adaptive update strategies)
     def train(self, data, test_data):
         # init phi
         phi = deepcopy(self.model.base_model.state_dict())
@@ -355,12 +323,6 @@ class Modeling:
                 # this_lr = self.meta_lr*cur_lr/self.tdmeta_lr
                 # this_lr = cur_lr
                 self.global_optimizer.step(phi, phi_grads, self.meta_lr)
-
-                # 可能是这里的grad过大，导致hypr_param_gen的参数过大，生成的超参就大；
-                # for i, phi_grad in zip(phi.keys(), phi_grads):
-                #     phi[i] = (1-self.meta_wd*self.meta_lr)*phi[i] - self.meta_lr * phi_grad
-                # for i, phi_grad in zip(phi.keys(), phi_grads):
-                #     phi[i] = phi[i] - self.meta_lr * phi_grad
                 
                 # update task_adaptive_optim, task_encoder
                 self.optimizer.zero_grad()
@@ -394,6 +356,50 @@ class Modeling:
 
         return best_model
 
+
+    # === [model test method] =====================================
+    def model_test(self, data, optimizer):
+        all_loss = 0
+        rmse = []
+        mae = []
+        ndcg1, ndcg3, ndcg5, ndcg7, ndcg10 = [], [], [], [], []
+        recall1, recall3, recall5, recall7, recall10 = [], [], [], [], []
+        phi = deepcopy(self.model.state_dict())
+
+        for i in tqdm(range(len(data))):
+            # print('before theta:{}'.format(theta['hidden_layer_1.weight']))
+            sup_x1, sup_x2, sup_y, que_x1, que_x2, que_y = data[i]
+            sup_x1, sup_x2, sup_y, que_x1, que_x2 = sup_x1.to(self.device), sup_x2.to(self.device),\
+                                                                sup_y.to(self.device), que_x1.to(self.device),\
+                                                                que_x2.to(self.device)
+
+            # local update
+            self.model.load_state_dict(phi)
+            self.local_update(sup_x1=sup_x1, sup_x2=sup_x2, sup_y=sup_y, optimizer=optimizer)
+            
+            # que loss
+            with torch.no_grad():
+                que_y_hat = self.model(que_x1, que_x2).cpu()
+                local_que_loss = self.loss_fn(que_y_hat, que_y.view(-1, 1))
+                all_loss += local_que_loss
+
+            # print(que_y_hat)
+            # que_y_pred = torch.argmax(que_y_hat, dim=1) # range: 0-4
+            mae.append(MAE(que_y_hat.view(-1), que_y.cpu()))
+            rmse.append(RMSE(que_y_hat.view(-1), que_y.cpu()))
+            ndcg3.append(NDCG(que_y_hat.view(-1), que_y.cpu(), 3))
+            ndcg5.append(NDCG(que_y_hat.view(-1), que_y.cpu(), 5))
+
+        mmae = sum(mae) / len(mae)
+        mrmse = sum(rmse) / len(rmse)
+        mndcg3 = sum(ndcg3) / len(ndcg3)
+        mndcg5 = sum(ndcg5) / len(ndcg5)
+        mloss = all_loss / len(data) 
+        
+        # print(mae, rmse)
+        print(f'mae:{mmae.item()}, rmse:{mrmse.item()}, ndcg3:{mndcg3}, ndcg5:{mndcg5}')
+        return mmae, rmse
+    
     def test(self, data, tr_epoch=0):
         all_loss = 0
         rmse = []
