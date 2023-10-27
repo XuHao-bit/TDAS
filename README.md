@@ -85,5 +85,18 @@ python run_experiment.py --mode tdmeta >> [result path]
 If you use this code, please consider to cite the following paper:
 
 ```
-
+@inproceedings{DBLP:conf/cikm/ZhaoZWJYT23,
+  author       = {Xuhao Zhao and
+                  Yanmin Zhu and
+                  Chunyang Wang and
+                  Mengyuan Jing and
+                  Jiadi Yu and
+                  Feilong Tang},
+  title        = {Task-Difficulty-Aware Meta-Learning with Adaptive Update Strategies
+                  for User Cold-Start Recommendation},
+  booktitle    = {{CIKM}},
+  pages        = {3484--3493},
+  publisher    = {{ACM}},
+  year         = {2023}
+}
 ```
